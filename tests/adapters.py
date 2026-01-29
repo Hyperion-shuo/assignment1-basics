@@ -569,7 +569,7 @@ def get_tokenizer(
         merges=merges,
         special_tokens=special_tokens
     )
-    raise tokenizer
+    return tokenizer
 
 # uv run pytest tests/test_train_bpe.py
 def run_train_bpe(

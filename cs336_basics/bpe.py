@@ -7,7 +7,18 @@ from multiprocessing import Pool
 from collections import Counter, defaultdict
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
-_INVERT_TABLE = bytes.maketrans(bytes(range(256)), bytes(255 - i for i in range(256)))
+
+class _RevBytes:
+    __slots__ = ("value",)
+
+    def __init__(self, value: bytes):
+        self.value = value
+
+    def __lt__(self, other):
+        return self.value > other.value
+
+    def __eq__(self, other):
+        return self.value == other.value
 
 class Node:
     def __init__(self, token_id):
@@ -116,8 +127,8 @@ class BPE:
                                'freq': freq})
 
     def _heap_key(self, pair, count):
-        b0 = self.vocab[pair[0]].translate(_INVERT_TABLE)
-        b1 = self.vocab[pair[1]].translate(_INVERT_TABLE)
+        b0 = _RevBytes(self.vocab[pair[0]])
+        b1 = _RevBytes(self.vocab[pair[1]])
         return (-count, b0, b1, pair)
             
     def _merge_cached(self, pair, new_token_id):
@@ -206,16 +217,32 @@ class BPE:
         for pair, locations in self.pair_indexes.items():
             for word_idx, node in locations:
                 self.count[pair] += self.words[word_idx]['freq']
+        self.heap = []
+        for pair, cnt in self.count.items():
+            if cnt > 0:
+                heapq.heappush(self.heap, self._heap_key(pair, cnt))
+
         for i in range(self.num_merges): 
             # break ties in pair frequency by preferring the lexicographically greater pair (by bytes)
             # bytes can be directly compared in Python using lexicographic order
-            max_pair, max_count = max(self.count.items(), key=lambda x: (x[1], self.vocab[x[0][0]], self.vocab[x[0][1]]))
-            # merged_frequency_table = merge(frequency_table, max_pair, idx)
-            # frequency_table = merged_frequency_table
-            self._merge_cached(max_pair, new_token_id)
+            while self.heap:
+                neg_count, _, _, candidate = heapq.heappop(self.heap)
+                current_count = self.count.get(candidate, 0)
+                if current_count > 0 and current_count == -neg_count:
+                    max_pair = candidate
+                    break
+            else:
+                break
+
+            updated_pairs = self._merge_cached(max_pair, new_token_id)
             self.merges.append((self.vocab[max_pair[0]], self.vocab[max_pair[1]]))
             self.vocab[new_token_id] = self.vocab[max_pair[0]] + self.vocab[max_pair[1]]
             new_token_id += 1
+
+            for pair in updated_pairs:
+                cnt = self.count.get(pair, 0)
+                if cnt > 0:
+                    heapq.heappush(self.heap, self._heap_key(pair, cnt))
 
         # add special to vocab at the end
         for special_token in self.special_tokens:

@@ -51,6 +51,106 @@ def _process_chunk_re(text, pattern_str, special_tokens):
 
     return chunk_list
 
+def _worker_encode(text_chunk: str, vocab: dict[int, bytes], inv_vocab: dict[bytes, int], 
+                   merges_id: dict[tuple[int, int], int], pattern_str: str, 
+                   special_tokens: list[str] | None) -> list[int]:
+    """
+    Worker function for multi-process encoding.
+    This function runs in a separate process and encodes a single text chunk.
+    
+    Args:
+        text_chunk: The text chunk to encode
+        vocab: Token ID to bytes mapping
+        inv_vocab: Bytes to token ID mapping
+        merges_id: Merge pair to merge order mapping
+        pattern_str: Regex pattern string for tokenization
+        special_tokens: List of special tokens
+    
+    Returns:
+        List of token IDs
+    """
+    # Process the text chunk to get byte chunks
+    chunks_bytes_list = _process_chunk_re(text_chunk, pattern_str, special_tokens if special_tokens else [])
+    
+    encode_ids = []
+    for is_special, chunks_bytes in chunks_bytes_list:
+        if is_special:
+            token_id = inv_vocab.get(chunks_bytes)
+            if token_id is None:
+                raise ValueError(f"Special token not found in vocab: {chunks_bytes!r}")
+            encode_ids.append(token_id)
+            continue
+        
+        # Build double linked list for BPE merging
+        if len(chunks_bytes) == 0:
+            continue
+            
+        # Build linked list
+        head = Node(inv_vocab.get(bytes([chunks_bytes[0]])))
+        curr = head
+        chunk_heap = []
+        
+        if len(chunks_bytes) > 1:
+            for i in range(1, len(chunks_bytes)):
+                new_node = Node(inv_vocab.get(bytes([chunks_bytes[i]])))
+                curr.next = new_node
+                new_node.prev = curr
+                pair = (curr.token_id, new_node.token_id)
+                heapq.heappush(chunk_heap, (merges_id.get(pair, float('inf')), pair, curr))
+                curr = new_node
+        
+        # Perform BPE merges
+        while chunk_heap:
+            merge_id, pair, node = heapq.heappop(chunk_heap)
+            if merge_id == float('inf'):
+                break
+            
+            bigram0, bigram1 = pair
+            # Skip if this location has already been invalidated
+            if node.token_id != bigram0 or node.next is None or node.next.token_id != bigram1:
+                continue
+            
+            node_to_remove = node.next
+            # Perform the merge
+            merged_bytes = vocab[bigram0] + vocab[bigram1]
+            new_token_id = inv_vocab.get(merged_bytes)
+            if new_token_id is None:
+                raise ValueError(f"Merged token not in vocab: {merged_bytes!r}")
+            node.token_id = new_token_id
+            node.next = node_to_remove.next
+            if node_to_remove.next:
+                node_to_remove.next.prev = node
+            
+            # Invalidate the removed node
+            node_to_remove.token_id = -1
+            node_to_remove.next = None
+            node_to_remove.prev = None
+            
+            # Add new pairs to heap
+            if node.prev:
+                new_prev_pair = (node.prev.token_id, node.token_id)
+                heapq.heappush(chunk_heap, (merges_id.get(new_prev_pair, float('inf')), new_prev_pair, node.prev))
+            if node.next:
+                new_next_pair = (node.token_id, node.next.token_id)
+                heapq.heappush(chunk_heap, (merges_id.get(new_next_pair, float('inf')), new_next_pair, node))
+        
+        # Extract tokens from linked list
+        curr = head
+        while curr:
+            encode_ids.append(curr.token_id)
+            curr = curr.next
+    
+    return encode_ids
+
+
+def _worker_encode_tuple(args):
+    """
+    Wrapper for _worker_encode that accepts a single tuple argument.
+    This is needed for use with Pool.imap which only accepts single-argument functions.
+    """
+    return _worker_encode(*args)
+
+
 def get_status(pair_indexes):
     count = defaultdict(int)
     for pair, pair_ids in pair_indexes.items():
@@ -213,6 +313,73 @@ class TrainedTokenizer:
             encode_ids.extend(self._extract_tokens_from_linked_list(head))
         return encode_ids
     
+    def encode_multiprocess(self, text: str, num_process: int = 4) -> list[int]:
+        """
+        Multi-process version of encode for large texts.
+        
+        Uses <|endoftext|> as delimiter to split text into chunks and processes
+        them in parallel using multiprocessing.Pool.
+        
+        Args:
+            text: The input text to encode
+            num_process: Number of processes to use (default: 16)
+        
+        Returns:
+            List of token IDs
+        """
+        # Handle empty string
+        if not text:
+            return []
+        
+        # Check if we can use multi-process mode (need <|endoftext|> as delimiter)
+        delimiter = "<|endoftext|>"
+        if delimiter not in text or not self.special_tokens or delimiter not in self.special_tokens:
+            # Fallback to single-process encode
+            return self.encode(text)
+        
+        # Find chunk boundaries based on <|endoftext|> delimiter
+        boundaries = find_chunk_boundaries_for_str(text, num_process, delimiter)
+        
+        # Build task list
+        tasks = []
+        for i in range(len(boundaries) - 1):
+            start = boundaries[i]
+            end = boundaries[i + 1]
+            chunk = text[start:end]
+            if chunk:
+                # Parameters for _worker_encode
+                tasks.append((
+                    chunk,
+                    self.vocab,
+                    self.inv_vocab,
+                    self.merges_id,
+                    self.pattern_str,
+                    self.special_tokens
+                ))
+        
+        # If no valid tasks, fallback to single-process
+        if not tasks:
+            return self.encode(text)
+        
+        # Adjust process count if needed
+        actual_num_process = min(num_process, len(tasks))
+        
+        # Execute in parallel with progress bar
+        encode_ids = []
+        with Pool(processes=actual_num_process) as pool:
+            # Use imap with tqdm for real-time progress tracking
+            results = list(tqdm(
+                pool.imap(_worker_encode_tuple, tasks),
+                total=len(tasks),
+                desc="Encoding chunks",
+                unit="chunk"
+            ))
+            # Merge results in order
+            for res in results:
+                encode_ids.extend(res)
+        
+        return encode_ids
+
     def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
         for line in tqdm(iterable):
             yield from self.encode(line)        

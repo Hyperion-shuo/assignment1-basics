@@ -164,3 +164,4 @@ cython_debug/
 
 write_up/*
 data/*
+.vscode/*

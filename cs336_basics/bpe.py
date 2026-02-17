@@ -37,6 +37,8 @@ def _process_chunk_re(input_path, start, end, pattern_str, special_tokens):
     text = chunk_bytes.decode("utf-8", errors="ignore")
     # <|endoftext|> convert to \<\|endoftext\|\>, otherwise | will be misunderstand as 'or'
     escaped_special_tokens = [re.escape(t) for t in special_tokens]
+    # 将所有转义后的特殊 Token 用 | 连接起来。构建一个正则表达式，意思是“匹配特殊 Token A 或者 特殊 Token B 或者 ...”。
+    # 如果特殊 Token 是 ['<|endoftext|>', '<|padding|>']，生成的 pattern 就是："\<\|endoftext\|\>|\<\|padding\|\>"
     special_pattern = "|".join(escaped_special_tokens)
     splits = re.split(special_pattern, text)
     

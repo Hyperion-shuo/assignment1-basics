@@ -9,8 +9,6 @@ import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
-from cs336_basics.bpe import BPE
-
 
 def run_linear(
     d_in: int,
@@ -30,8 +28,10 @@ def run_linear(
     Returns:
         Float[Tensor, "... d_out"]: The transformed output of your linear module.
     """
-
-    raise NotImplementedError
+    from cs336_basics.transformer.core import Linear
+    linear = Linear(d_in, d_out)
+    linear.load_state_dict({'weight': weights})
+    return linear(in_features)
 
 
 def run_embedding(
@@ -53,7 +53,10 @@ def run_embedding(
         Float[Tensor, "... d_model"]: Batch of embeddings returned by your Embedding layer.
     """
 
-    raise NotImplementedError
+    from cs336_basics.transformer.core import Embedding
+    embedding = Embedding(vocab_size, d_model)
+    embedding.load_state_dict({'weight': weights})
+    return embedding(token_ids)
 
 
 def run_swiglu(
@@ -85,8 +88,12 @@ def run_swiglu(
     # swiglu.w1.weight.data = w1_weight
     # swiglu.w2.weight.data = w2_weight
     # swiglu.w3.weight.data = w3_weight
-    raise NotImplementedError
-
+    from cs336_basics.transformer.core import SwiGLU
+    swiglu = SwiGLU(d_model, d_ff)
+    swiglu.linear_1.weight.data = w1_weight
+    swiglu.linear_2.weight.data = w2_weight
+    swiglu.linear_3.weight.data = w3_weight
+    return swiglu(in_features)
 
 def run_scaled_dot_product_attention(
     Q: Float[Tensor, " ... queries d_k"],
@@ -106,7 +113,8 @@ def run_scaled_dot_product_attention(
     Returns:
         Float[Tensor, " ... queries d_v"]: Output of SDPA
     """
-    raise NotImplementedError
+    from cs336_basics.transformer.attention import scaled_dot_product_attention
+    return scaled_dot_product_attention(Q, K, V, mask)
 
 
 def run_multihead_self_attention(
@@ -140,7 +148,13 @@ def run_multihead_self_attention(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    from cs336_basics.transformer.attention import MultiheadSelfAttention
+    multi_head_self_attention = MultiheadSelfAttention(d_model, num_heads)
+    multi_head_self_attention.W_Q.weight.data = q_proj_weight
+    multi_head_self_attention.W_K.weight.data = k_proj_weight
+    multi_head_self_attention.W_V.weight.data = v_proj_weight
+    multi_head_self_attention.W_O.weight.data = o_proj_weight
+    return multi_head_self_attention(in_features)
 
 
 def run_multihead_self_attention_with_rope(
@@ -180,8 +194,18 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
-
+    from cs336_basics.transformer.rope import RotaryPositionalEmbedding
+    from cs336_basics.transformer.attention import MultiheadSelfAttention
+    
+    multi_head_self_attention = MultiheadSelfAttention(d_model, num_heads)
+    multi_head_self_attention.W_Q.weight.data = q_proj_weight
+    multi_head_self_attention.W_K.weight.data = k_proj_weight
+    multi_head_self_attention.W_V.weight.data = v_proj_weight
+    multi_head_self_attention.W_O.weight.data = o_proj_weight
+    
+    rope = RotaryPositionalEmbedding(theta, int(d_model / num_heads), max_seq_len)
+    
+    return multi_head_self_attention(in_features, token_positions, rope)
 
 def run_rope(
     d_k: int,
@@ -202,7 +226,9 @@ def run_rope(
     Returns:
         Float[Tensor, " ... sequence_length d_k"]: Tensor with RoPEd input.
     """
-    raise NotImplementedError
+    from cs336_basics.transformer.rope import RotaryPositionalEmbedding
+    rope = RotaryPositionalEmbedding(theta, d_k, max_seq_len)
+    return rope(in_query_or_key, token_positions)
 
 
 def run_transformer_block(
@@ -275,7 +301,27 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+    from cs336_basics.transformer.rope import RotaryPositionalEmbedding
+    from cs336_basics.transformer.transformer import TransformerBlock
+    
+    transformer_block = TransformerBlock(d_model, num_heads, d_ff)
+    rope = RotaryPositionalEmbedding(theta, int(d_model / num_heads), max_seq_len)
+    
+    # load weights
+    transformer_block.attn.W_Q.weight.data = weights['attn.q_proj.weight']
+    transformer_block.attn.W_K.weight.data = weights['attn.k_proj.weight']
+    transformer_block.attn.W_V.weight.data = weights['attn.v_proj.weight']
+    transformer_block.attn.W_O.weight.data = weights['attn.output_proj.weight']
+    transformer_block.attn_norm.weight.data = weights['ln1.weight']
+    transformer_block.ffn.linear_1.weight.data = weights['ffn.w1.weight']
+    transformer_block.ffn.linear_2.weight.data = weights['ffn.w2.weight']
+    transformer_block.ffn.linear_3.weight.data = weights['ffn.w3.weight']
+    transformer_block.ffn_norm.weight.data = weights['ln2.weight']
+    
+    # manually add token positions for zero to seq_len-1
+    token_positions = torch.arange(in_features.shape[-2], device=in_features.device).unsqueeze(0)
+
+    return transformer_block(in_features, token_positions, rope)
 
 
 def run_transformer_lm(
@@ -357,8 +403,46 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
-
+    from cs336_basics.transformer.transformer import TransformerLM
+    transformer = TransformerLM(
+        vocab_size=vocab_size,
+        context_length=context_length,
+        d_model=d_model,
+        num_layers=num_layers,
+        num_heads=num_heads,
+        d_ff=d_ff,
+        rope_theta=rope_theta,
+    )
+    # load weights
+    transformer.token_embeddings.weight.data = weights['token_embeddings.weight']
+    transformer.ln_final.weight.data = weights['ln_final.weight']
+    transformer.lm_head.weight.data = weights['lm_head.weight']
+    
+    for layer_idx in range(num_layers):
+        layer_weights = {
+            'attn.q_proj.weight': weights[f'layers.{layer_idx}.attn.q_proj.weight'],
+            'attn.k_proj.weight': weights[f'layers.{layer_idx}.attn.k_proj.weight'],
+            'attn.v_proj.weight': weights[f'layers.{layer_idx}.attn.v_proj.weight'],
+            'attn.output_proj.weight': weights[f'layers.{layer_idx}.attn.output_proj.weight'],
+            'ln1.weight': weights[f'layers.{layer_idx}.ln1.weight'],
+            'ffn.w1.weight': weights[f'layers.{layer_idx}.ffn.w1.weight'],
+            'ffn.w2.weight': weights[f'layers.{layer_idx}.ffn.w2.weight'],
+            'ffn.w3.weight': weights[f'layers.{layer_idx}.ffn.w3.weight'],
+            'ln2.weight': weights[f'layers.{layer_idx}.ln2.weight'],
+        }
+        transformer.layers[layer_idx].attn.W_Q.weight.data = layer_weights['attn.q_proj.weight']
+        transformer.layers[layer_idx].attn.W_K.weight.data = layer_weights['attn.k_proj.weight']
+        transformer.layers[layer_idx].attn.W_V.weight.data = layer_weights['attn.v_proj.weight']
+        transformer.layers[layer_idx].attn.W_O.weight.data = layer_weights['attn.output_proj.weight']
+        transformer.layers[layer_idx].attn_norm.weight.data = layer_weights['ln1.weight']
+        transformer.layers[layer_idx].ffn.linear_1.weight.data = layer_weights['ffn.w1.weight']
+        transformer.layers[layer_idx].ffn.linear_2.weight.data = layer_weights['ffn.w2.weight']
+        transformer.layers[layer_idx].ffn.linear_3.weight.data = layer_weights['ffn.w3.weight']
+        transformer.layers[layer_idx].ffn_norm.weight.data = layer_weights['ln2.weight']
+        
+    token_positions = torch.arange(in_indices.shape[-1], device=in_indices.device).unsqueeze(0)
+    probs = transformer(in_indices, token_positions)
+    return probs
 
 def run_rmsnorm(
     d_model: int,
@@ -380,7 +464,10 @@ def run_rmsnorm(
         Float[Tensor,"... d_model"]: Tensor of with the same shape as `in_features` with the output of running
         RMSNorm of the `in_features`.
     """
-    raise NotImplementedError
+    from cs336_basics.transformer.core import RMSNorm
+    rms_norm = RMSNorm(d_model=d_model, eps=eps)
+    rms_norm.load_state_dict({'weight': weights})
+    return rms_norm(in_features)
 
 
 def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
@@ -433,7 +520,8 @@ def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, "
         Float[Tensor, "..."]: Tensor of with the same shape as `in_features` with the output of
         softmax normalizing the specified `dim`.
     """
-    raise NotImplementedError
+    from cs336_basics.transformer.core import softmax
+    return softmax(in_features, dim)
 
 
 def run_cross_entropy(
@@ -451,7 +539,9 @@ def run_cross_entropy(
     Returns:
         Float[Tensor, ""]: The average cross-entropy loss across examples.
     """
-    raise NotImplementedError
+    from cs336_basics.train.loss import cross_entropy_loss
+
+    return cross_entropy_loss(inputs, targets)
 
 
 def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float) -> None:
@@ -463,7 +553,9 @@ def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm:
 
     The gradients of the parameters (parameter.grad) should be modified in-place.
     """
-    raise NotImplementedError
+    from cs336_basics.train.optimizer import gradient_clipping
+
+    return gradient_clipping(parameters, max_l2_norm)
 
 
 def get_adamw_cls() -> Any:
@@ -498,7 +590,9 @@ def run_get_lr_cosine_schedule(
     Returns:
         Learning rate at the given iteration under the specified schedule.
     """
-    raise NotImplementedError
+    from cs336_basics.train.optimizer import lr_cos_schedule
+
+    return lr_cos_schedule(it, min_learning_rate, max_learning_rate, warmup_iters, cosine_cycle_iters)
 
 
 def run_save_checkpoint(

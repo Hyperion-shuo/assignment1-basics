@@ -72,7 +72,25 @@ class TrainedTokenizer:
     
     @classmethod
     def from_files(cls, vocab_filepath, merges_filepath, special_tokens=None):
-        pass
+        import json
+        
+        # Load vocab from JSON file
+        # Format: {token_id: [byte1, byte2, ...], ...}
+        with open(vocab_filepath, "r", encoding="utf-8") as f:
+            vocab_data = json.load(f)
+        
+        # Convert vocab: {str(token_id): list[int]} -> {int: bytes}
+        vocab = {int(k): bytes(v) for k, v in vocab_data.items()}
+        
+        # Load merges from JSON file
+        # Format: [[[byte1, byte2], [byte3, byte4]], ...]
+        with open(merges_filepath, "r", encoding="utf-8") as f:
+            merges_data = json.load(f)
+        
+        # Convert merges: list of [list[int], list[int]] -> list of (bytes, bytes)
+        merges = [(bytes(merge[0]), bytes(merge[1])) for merge in merges_data]
+        
+        return cls(vocab, merges, special_tokens)
     
     def _build_double_linked_list(self, chunk_bytes: bytes):
         if len(chunk_bytes) == 0:

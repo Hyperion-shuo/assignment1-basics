@@ -34,7 +34,7 @@ class AdamW(torch.optim.Optimizer):
     def __init__(self, 
                  params, 
                  lr: Float=1e-3, 
-                 betas: Tuple[Float, Float]= (0.9, 0.95),
+                 betas: Tuple[Float, Float]= (0.9, 0.999), # try (0.9, 0.95) for larger model
                  eps: Float=1e-8,
                  weight_decay: Float=0.01
         ):

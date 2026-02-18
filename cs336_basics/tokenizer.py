@@ -312,73 +312,32 @@ class TrainedTokenizer:
                     heapq.heappush(chunk_heap, updated_pair)
             encode_ids.extend(self._extract_tokens_from_linked_list(head))
         return encode_ids
-    
-    def encode_multiprocess(self, text: str, num_process: int = 4) -> list[int]:
+
+    def encode_file_streaming(self, filepath: str, num_chunks: int = 16) -> Iterator[list[int]]:
         """
-        Multi-process version of encode for large texts.
-        
-        Uses <|endoftext|> as delimiter to split text into chunks and processes
-        them in parallel using multiprocessing.Pool.
+        Stream-encode a file: yields token lists chunk by chunk.
+        Uses find_chunk_boundaries for memory-efficient boundary detection.
         
         Args:
-            text: The input text to encode
-            num_process: Number of processes to use (default: 16)
-        
-        Returns:
-            List of token IDs
+            filepath: Path to text file
+            num_chunks: Number of chunks to split file into
+            
+        Yields:
+            List of token IDs for each chunk
         """
-        # Handle empty string
-        if not text:
-            return []
+        delimiter = b"<|endoftext|>"
         
-        # Check if we can use multi-process mode (need <|endoftext|> as delimiter)
-        delimiter = "<|endoftext|>"
-        if delimiter not in text or not self.special_tokens or delimiter not in self.special_tokens:
-            # Fallback to single-process encode
-            return self.encode(text)
-        
-        # Find chunk boundaries based on <|endoftext|> delimiter
-        boundaries = find_chunk_boundaries_for_str(text, num_process, delimiter)
-        
-        # Build task list
-        tasks = []
-        for i in range(len(boundaries) - 1):
-            start = boundaries[i]
-            end = boundaries[i + 1]
-            chunk = text[start:end]
-            if chunk:
-                # Parameters for _worker_encode
-                tasks.append((
-                    chunk,
-                    self.vocab,
-                    self.inv_vocab,
-                    self.merges_id,
-                    self.pattern_str,
-                    self.special_tokens
-                ))
-        
-        # If no valid tasks, fallback to single-process
-        if not tasks:
-            return self.encode(text)
-        
-        # Adjust process count if needed
-        actual_num_process = min(num_process, len(tasks))
-        
-        # Execute in parallel with progress bar
-        encode_ids = []
-        with Pool(processes=actual_num_process) as pool:
-            # Use imap with tqdm for real-time progress tracking
-            results = list(tqdm(
-                pool.imap(_worker_encode_tuple, tasks),
-                total=len(tasks),
-                desc="Encoding chunks",
-                unit="chunk"
-            ))
-            # Merge results in order
-            for res in results:
-                encode_ids.extend(res)
-        
-        return encode_ids
+        with open(filepath, "rb") as f:
+            boundaries = find_chunk_boundaries(f, num_chunks, delimiter)
+            
+            for i in range(len(boundaries) - 1):
+                start, end = boundaries[i], boundaries[i + 1]
+                f.seek(start)
+                chunk_bytes = f.read(end - start)
+                chunk_text = chunk_bytes.decode("utf-8", errors="ignore")
+                
+                if chunk_text:
+                    yield self.encode(chunk_text)
 
     def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
         for line in tqdm(iterable):

@@ -2,7 +2,7 @@ import regex as re
 import os
 import heapq
 
-from cs336_basics.pretokenization_example import find_chunk_boundaries, find_chunk_boundaries_for_str
+from cs336_basics.pretokenization_example import find_chunk_boundaries
 from multiprocessing import Pool
 from collections import Counter, defaultdict
 

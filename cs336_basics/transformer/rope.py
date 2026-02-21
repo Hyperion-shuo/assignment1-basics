@@ -22,10 +22,25 @@ class RotaryPositionalEmbedding(nn.Module):
         cos, sin = angle.cos(), angle.sin()
         # cos, sin = cos.to(torch.bfloat16), sin.to(torch.bfloat16)
         return cos, sin
-        
+    
+    # to remember
+    # 1. complex view
+    # e^(i theta) = cos + i sin
+    # (a + bi) (cos + i sin) = (a cos - b sin) + i (a sin + b cos)
+    # cos -sin  a
+    # sin cos.  b     
+    # 2. base vector view
+    # cos -sin  
+    # sin cos.  
+    # dot (1, 0) = (cos, sin)
+    # dot (0, 1) = (-sin, cos)
     def forward(self, x: torch.Tensor, token_positions: torch.Tensor) -> torch.Tensor:
         q_0, q_1 = x[..., ::2], x[..., 1::2]
         cos, sin = self.cos[token_positions], self.sin[token_positions]
+        # If x has shape (B, num_heads, seq, d_head), cos/sin need an extra dim for heads
+        if x.dim() == 4:
+            cos = cos.unsqueeze(1)
+            sin = sin.unsqueeze(1)
         # torch.cat([q_0 * cos - q_1 * sin, q_0 * sin + q_1 * cos], dim=-1) is also right, llama style implementation
         # but to pass the test case, we must get the same order back
         return torch.stack([q_0 * cos - q_1 * sin, q_0 * sin + q_1 * cos], dim=-1).flatten(-2)

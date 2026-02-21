@@ -166,3 +166,6 @@ write_up/*
 data/*
 .vscode/*
 .codebuddy/*
+wandb/*
+nohup_scripts/logs/*
+models/*

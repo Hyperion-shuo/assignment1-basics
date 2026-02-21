@@ -15,4 +15,4 @@ def cross_entropy_loss(logits: Tensor, targets: Tensor) -> Tensor:
     return -select_log_probs.mean()
 
 def perplexity(logits: Tensor, targets: Tensor) -> Tensor:
-    return torch.exp(cross_entropy_loss)
+    return torch.exp(cross_entropy_loss(logits, targets))

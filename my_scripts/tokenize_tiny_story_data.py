@@ -20,10 +20,10 @@ from cs336_basics.pretokenization_example import find_chunk_boundaries
 
 # Paths
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
-VOCAB_PATH = os.path.join(DATA_DIR, 'owt_train_bpe_vocab.json')
-MERGES_PATH = os.path.join(DATA_DIR, 'owt_train_bpe_merges.json')
-TRAIN_PATH = os.path.join(DATA_DIR, 'owt_train.txt')
-VAL_PATH = os.path.join(DATA_DIR, 'owt_valid.txt')
+VOCAB_PATH = os.path.join(DATA_DIR, 'tinystories_bpe_vocab.json')
+MERGES_PATH = os.path.join(DATA_DIR, 'tinystories_bpe_merges.json')
+TRAIN_PATH = os.path.join(DATA_DIR, 'TinyStoriesV2-GPT4-train.txt')
+VAL_PATH = os.path.join(DATA_DIR, 'TinyStoriesV2-GPT4-valid.txt')
 SPECIAL_TOKENS = ["<|endoftext|>"]
 
 
@@ -161,10 +161,10 @@ def test_mode(tokenizer: TrainedTokenizer, num_samples: int = 64):
         return False
 
 
-def full_mode(tokenizer: TrainedTokenizer, num_chunks: int = 32, chunk_size_mb: int = 200):
+def full_mode(tokenizer: TrainedTokenizer, num_chunks: int = 8, chunk_size_mb: int = 200):
     """Full tokenization mode with streaming and chunked saving."""
     print("\n" + "=" * 60)
-    print("FULL MODE: Tokenizing OWT dataset")
+    print("FULL MODE: Tokenizing TinyStoriesV2 dataset")
     print(f"  - Processing chunks: {num_chunks}")
     print(f"  - Output file size: ~{chunk_size_mb}MB each")
     print("=" * 60)
@@ -173,7 +173,7 @@ def full_mode(tokenizer: TrainedTokenizer, num_chunks: int = 32, chunk_size_mb: 
     
     # Process train
     # print("\n>>> Processing train file...")
-    # train_output = os.path.join(DATA_DIR, 'owt_train_tokens.npy')
+    # train_output = os.path.join(DATA_DIR, 'tinystories_train_tokens.npy')
     # train_start = time.time()
     # train_tokens = tokenize_and_save_streaming(
     #     tokenizer, TRAIN_PATH, train_output, num_chunks, chunk_size_mb
@@ -184,7 +184,7 @@ def full_mode(tokenizer: TrainedTokenizer, num_chunks: int = 32, chunk_size_mb: 
     
     # Process val
     print("\n>>> Processing val file...")
-    val_output = os.path.join(DATA_DIR, 'owt_val_tokens.npy')
+    val_output = os.path.join(DATA_DIR, 'tinystories_val_tokens.npy')
     val_start = time.time()
     val_tokens = tokenize_and_save_streaming(
         tokenizer, VAL_PATH, val_output, 1, chunk_size_mb
@@ -203,13 +203,13 @@ def full_mode(tokenizer: TrainedTokenizer, num_chunks: int = 32, chunk_size_mb: 
     print(f"  Val time:   {val_time:.2f}s")
     print(f"  Total time: {total_time:.2f}s")
 
-# uv run python -m my_scripts.tokenize_owt_data --test
-# nohup uv run python -m my_scripts.tokenize_owt_data > tokenize_owt.log 2>&1 &
+# uv run python -m my_scripts.tokenize_tiny_story_data --test
+# nohup uv run python -m my_scripts.tokenize_tiny_story_data > tokenize_tiny_story.log 2>&1 &
 def main():
-    parser = argparse.ArgumentParser(description='Tokenize OWT data')
+    parser = argparse.ArgumentParser(description='Tokenize TinyStoriesV2 data')
     parser.add_argument('--test', action='store_true', help='Run test mode')
     parser.add_argument('--num-samples', type=int, default=64, help='Samples for test mode')
-    parser.add_argument('--num-chunks', type=int, default=32, help='Number of chunks for streaming')
+    parser.add_argument('--num-chunks', type=int, default=8, help='Number of chunks for streaming')
     parser.add_argument('--chunk-size-mb', type=int, default=200, help='Output file size in MB')
     args = parser.parse_args()
     

@@ -1,4 +1,5 @@
 import os
+import time
 import numpy.typing as npt
 import torch
 import wandb
@@ -40,6 +41,9 @@ def parse_args():
     parser.add_argument("--num_heads", type=int, default=16)
     parser.add_argument("--d_ff", type=int, default=1344)
     parser.add_argument("--rope_theta", type=float, default=10000)
+    parser.add_argument("--use_rope", action=argparse.BooleanOptionalAction, default=True, help="Use RoPE (default: True). Use --no-use_rope to disable.")
+    parser.add_argument("--pre_norm", action=argparse.BooleanOptionalAction, default=True, help="Use pre-norm (default: True). Use --no-pre_norm for post-norm.")
+    parser.add_argument("--with_rms_norm", action=argparse.BooleanOptionalAction, default=True, help="Use RMSNorm (default: True). Use --no-with_rms_norm to disable.")
 
     # train loop
     parser.add_argument("--total_tokens", type=int, default=327680000, help="Total number of tokens to train on. Default 327680000 (~5000 iters with default batch_size and context_length).")
@@ -103,6 +107,14 @@ def get_grad_norm(params):
     return LA.vector_norm(norms).item()
 
 
+# helper: compute total parameter L2 norm
+def get_param_norm(params):
+    norms = [LA.vector_norm(p.data, ord=2) for p in params if p.data is not None]
+    if not norms:
+        return 0.0
+    return LA.vector_norm(torch.stack(norms)).item()
+
+
 @torch.no_grad()
 def evaluate(model, val_token_ids, args):
     """Evaluate model on validation set, return avg loss and perplexity."""
@@ -143,6 +155,9 @@ def main():
         num_heads=args.num_heads,
         d_ff=args.d_ff,
         rope_theta=args.rope_theta,
+        use_rope=args.use_rope,
+        pre_norm=args.pre_norm,
+        with_rms_norm=args.with_rms_norm,
     ).to('cuda')
 
     optimizer = AdamW(transformer.parameters())
@@ -184,10 +199,17 @@ def main():
                 if current_step >= max_iters:
                     done = True
                     break
+                step_start_time = time.time()
                 transformer.train()
                 x, y = x.cuda().long(), y.cuda().long()
 
-                logits = transformer(x)
+                # on log steps, also collect per-layer activation norms
+                is_log_step = (current_step % args.log_num_iter == 0)
+                if is_log_step:
+                    logits, layer_norms = transformer(x, return_layer_norms=True)
+                else:
+                    logits = transformer(x)
+                    layer_norms = None
                 loss = cross_entropy_loss(logits, y)
 
                 cur_lr = lr_cos_schedule(current_step, args.alpha_min, args.alpha_max, args.t_w, args.t_c)
@@ -199,17 +221,34 @@ def main():
                 gradient_clipping(transformer.parameters(), args.max_grad_norm)
                 optimizer.step()
 
-                if current_step % args.log_num_iter == 0:
+                # compute step timing and throughput
+                step_time = time.time() - step_start_time
+                tokens_per_step = args.batch_size * args.context_length
+                throughput = tokens_per_step / step_time  # tokens/sec
+
+                # compute grad clip ratio and param norm
+                grad_clip_ratio = grad_norm / args.max_grad_norm
+                param_norm = get_param_norm(transformer.parameters())
+
+                if is_log_step:
                     ppl = perplexity(logits, y).item()
-                    print(f"Step {current_step}: Loss={loss.item():.4f}, Perplexity={ppl:.4f}, GradNorm={grad_norm:.4f}, LR={cur_lr:.6f}")
+                    layer_norms_str = ', '.join([f'L{i}={v:.4f}' for i, v in enumerate(layer_norms)])
+                    print(f"Step {current_step}: Loss={loss.item():.4f}, Perplexity={ppl:.4f}, GradNorm={grad_norm:.4f}, LR={cur_lr:.6f}, StepTime={step_time:.3f}s, Throughput={throughput:.0f} tok/s, ParamNorm={param_norm:.4f}, LayerNorms=[{layer_norms_str}]")
                     if args.use_wandb:
-                        wandb.log({
+                        log_dict = {
                             "loss": loss.item(),
                             "perplexity": ppl,
                             "grad_norm": grad_norm,
+                            "grad_clip_ratio": grad_clip_ratio,
+                            "param_norm": param_norm,
+                            "wall_clock_time": step_time,
+                            "throughput": throughput,
                             "learning_rate": cur_lr,
-                            "tokens_seen": (current_step + 1) * args.batch_size * args.context_length,
-                        }, step=current_step)
+                            "tokens_seen": (current_step + 1) * tokens_per_step,
+                        }
+                        for i, norm_val in enumerate(layer_norms):
+                            log_dict[f"layer_{i}_activation_norm"] = norm_val
+                        wandb.log(log_dict, step=current_step)
 
                 if current_step % args.eval_num_iter == 0:
                     val_loss, val_ppl = evaluate(transformer, val_token_ids, args)

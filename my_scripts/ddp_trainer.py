@@ -23,7 +23,7 @@ from cs336_basics.train.optimizer import AdamW, lr_cos_schedule, gradient_clippi
 from cs336_basics.train.loss import cross_entropy_loss, perplexity
 from cs336_basics.train.checkpoint import save_checkpoint, load_checkpoint
 from cs336_basics.generate import generate
-from cs336_basics.collective_communication_utils import setup, cleanup, ddp_wrapper, ddp_bucket_wrapper
+from cs336_basics.collective_communication_utils import setup, cleanup, ddp_wrapper, ddp_bucket_wrapper, zero_wrapper
 
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
@@ -99,6 +99,8 @@ def parse_args():
                         help="Use ddp_wrapper to overlap communication and computation via per-param async all-reduce hooks.")
     parser.add_argument("--use_nvtx", action="store_true", default=False,
                         help="Enable NVTX range annotations for Nsight Systems profiling.")
+    parser.add_argument("--use_zero", action="store_true", default=False,
+                        help="Use ZeRO optimizer wrapper to shard optimizer states across ranks.")
 
     args = parser.parse_args()
 
@@ -222,16 +224,21 @@ def main(rank, world_size):
     if args.use_bucket_comm:
         # ddp_bucket_wrapper handles broadcast internally
         transformer = ddp_bucket_wrapper(transformer, bucket_size_mb=args.bucket_size_mb)
-        optimizer = AdamW(transformer.module.parameters())
+        model_params = transformer.module.parameters()
     elif args.use_overlap_comm:
         # ddp_wrapper handles broadcast internally, registers per-param async all-reduce hooks
         transformer = ddp_wrapper(transformer)
-        optimizer = AdamW(transformer.module.parameters())
+        model_params = transformer.module.parameters()
     else:
         # Broadcast model parameters from rank 0 to ensure all ranks start with the same weights
         for param in transformer.parameters():
             dist.broadcast(param.data, src=0)
-        optimizer = AdamW(transformer.parameters())
+        model_params = transformer.parameters()
+
+    if args.use_zero:
+        optimizer = zero_wrapper(model_params, optimizer_cls=AdamW)
+    else:
+        optimizer = AdamW(model_params)
     # if args.flatten_dense_tensors:
     #     grads_list = [p.grad for p in transformer.parameters() if p.grad is not None]
     #     flat_grads, grad_shapes = None, None
@@ -311,6 +318,9 @@ def main(rank, world_size):
                 cur_lr = lr_cos_schedule(current_step, args.alpha_min, args.alpha_max, args.t_w, args.t_c)
                 for param_group in optimizer.param_groups:
                     param_group['lr'] = cur_lr
+                if args.use_zero:
+                    for param_group in optimizer.optimizer.param_groups:
+                        param_group['lr'] = cur_lr
 
                 optimizer.zero_grad()
 

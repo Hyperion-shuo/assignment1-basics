@@ -27,8 +27,8 @@
 # EXTRA_ARGS="--use_bucket_comm --bucket_size_mb 1"
 
 # Experiment 6: with bucket-based gradient communication
-WANDB_RUN="ddp_bucket_10MB"
-EXTRA_ARGS="--use_bucket_comm --bucket_size_mb 10"
+# WANDB_RUN="ddp_bucket_10MB"
+# EXTRA_ARGS="--use_bucket_comm --bucket_size_mb 10"
 
 # Experiment 7: with bucket-based gradient communication
 # WANDB_RUN="ddp_bucket_100MB"
@@ -37,6 +37,14 @@ EXTRA_ARGS="--use_bucket_comm --bucket_size_mb 10"
 # Experiment 8: with bucket-based gradient communication
 # WANDB_RUN="ddp_bucket_1000MB"
 # EXTRA_ARGS="--use_bucket_comm --bucket_size_mb 1000"
+
+# Experiment 9: with ZeRO optimizer sharding (+ overlap comm)
+WANDB_RUN="ddp_zero_overlap"
+EXTRA_ARGS="--use_overlap_comm --use_zero"
+
+# Experiment 10: with ZeRO optimizer sharding (+ baseline naive ddp)
+# WANDB_RUN="ddp_zero_naive"
+# EXTRA_ARGS="--use_zero"
 # ==================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
